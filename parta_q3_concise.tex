@@ -60,7 +60,7 @@ SGX provides per-application isolation via encrypted memory regions (enclaves).
 \end{itemize}
 
 \paragraph{Enclave Measurement (MRENCLAVE)}
-\begin{lstlisting}[caption=MRENCLAVE Calculation]
+\begin{lstlisting}
 For each page added:
     For each 256-byte chunk:
         MRENCLAVE = SHA256(MRENCLAVE || chunk || offset)
