@@ -1,0 +1,174 @@
+\section{Part B: TPM Practical Demonstration}
+
+\subsection{Objective}
+
+Demonstrate TPM 2.0 secure key storage and PCR-based data sealing: (1) Create TPM key, (2) Seal data to PCR values, (3) Unseal successfully when PCRs match, (4) Show unseal failure when PCRs change.
+
+\subsection{Environment}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{OS}: Ubuntu 22.04, \textbf{TPM}: Software TPM (swtpm) at localhost:2321, \textbf{Tools}: tpm2-tools v5.x
+\end{itemize}
+
+\subsection{Task 1: Read Initial PCR Values}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+tpm2_pcrread sha256:0,7
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step01_pcrread.png}
+\caption{Initial PCR values (PCR 0: BIOS, PCR 7: Platform-specific)}
+\end{figure}
+
+PCR values represent baseline system state; will be used to create sealing policy.
+
+\subsection{Task 2: Create TPM Primary Key}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+tpm2_createprimary -C o -g sha256 -G rsa -c primary.ctx \
+  -a "restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth"
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step02_createprimary.png}
+\caption{Primary storage key (RSA 2048) in owner hierarchy}
+\end{figure}
+
+Primary key serves as root for key hierarchy; \texttt{fixedtpm} ensures hardware binding.
+
+\subsection{Task 3: Create PCR-Bound Policy \& Seal Data}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+# Create PCR policy
+tpm2_startauthsession --policy-session -S policy.session
+tpm2_policypcr --session policy.session --pcr-list sha256:0,7
+tpm2_policygetdigest --session policy.session -o policy.digest
+tpm2_flushcontext policy.session
+
+# Seal data
+echo "Confidential lab secret for Assignment 2" > secret.txt
+tpm2_create -C primary.ctx -L policy.digest -i secret.txt \
+  -r seal.priv -u seal.pub -a "fixedtpm|fixedparent"
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step03_policypcr.png}
+\caption{PCR policy digest bound to PCR 0 and 7}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step04_create.png}
+\caption{Sealed object with embedded PCR policy}
+\end{figure}
+
+Policy digest cryptographically binds to current PCR values; sealed object can only be unsealed when PCRs match.
+
+\subsection{Task 4: Load Sealed Object}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+tpm2_load -C primary.ctx -r seal.priv -u seal.pub -c seal.ctx
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step05_load.png}
+\caption{Sealed object loaded into TPM with unique object name}
+\end{figure}
+
+\subsection{Task 5: Unseal with Correct PCRs (Success)}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+tpm2_startauthsession --policy-session -S policy.session
+tpm2_policypcr --session policy.session --pcr-list sha256:0,7
+tpm2_unseal -c seal.ctx -p session:policy.session
+tpm2_flushcontext policy.session
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step06_unseal.png}
+\caption{Policy session satisfying PCR requirements}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step07_unseal_output.png}
+\caption{Successfully unsealed secret: "Confidential lab secret for Assignment 2"}
+\end{figure}
+
+\textbf{Why Success}: Current PCRs match sealed policy; TPM verifies and releases plaintext.
+
+\subsection{Task 6: Simulate Platform Tampering}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+# Extend PCR 0 to simulate BIOS modification
+echo "TAMPERED_BOOTLOADER" | openssl dgst -sha256 -binary | xxd -p > hash.txt
+tpm2_pcrextend 0:sha256=$(cat hash.txt)
+tpm2_pcrread sha256:0
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step08_pcrextend.png}
+\caption{PCR 0 extended; value changed completely from baseline}
+\end{figure}
+
+PCR extend is irreversible: $\text{PCR}_{\text{new}} = \text{SHA256}(\text{PCR}_{\text{old}} \,||\, \text{"TAMPERED"})$
+
+Simulates bootkit, BIOS modification, or unauthorized firmware change.
+
+\subsection{Task 7: Unseal with Modified PCRs (Failure)}
+
+\textbf{Commands}:
+\begin{lstlisting}[language=bash]
+# Attempt unseal (will fail)
+tpm2_startauthsession --policy-session -S policy.session
+tpm2_policypcr --session policy.session --pcr-list sha256:0,7
+tpm2_unseal -c seal.ctx -p session:policy.session
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step09_unseal_fail.png}
+\caption{Unseal failure: TPM\_RC\_POLICY\_FAIL due to PCR mismatch}
+\end{figure}
+
+\textbf{Why Failure}: Current PCR 0 $\neq$ Sealed PCR 0 $\rightarrow$ Policy digest mismatch $\rightarrow$ TPM refuses to release secret.
+
+\textbf{Security Implication}: Sealed data cryptographically bound to platform state; tampering prevents access.
+
+\subsection{Cleanup}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{attachments/step10_cleanup.png}
+\caption{Flushing transient handles and sessions}
+\end{figure}
+
+\subsection{Conclusion}
+
+\textbf{Results}:
+\begin{itemize}[leftmargin=*]
+    \item \checkmark Created primary storage key (RSA 2048, owner hierarchy)
+    \item \checkmark Created PCR-bound sealing policy
+    \item \checkmark Sealed confidential data to PCR values
+    \item \checkmark Successfully unsealed with matching PCRs
+    \item \checkmark Demonstrated unseal failure after PCR modification (TPM\_RC\_POLICY\_FAIL)
+\end{itemize}
+
+\textbf{Key Learning}: TPM provides hardware-backed protection through PCR-based sealing. Data cryptographically bound to platform state; any boot chain modification (detected via PCR changes) prevents unauthorized access. This forms the foundation for full-disk encryption (BitLocker, LUKS) and remote attestation in enterprise security.
+
+\textbf{Real-World Application}: BitLocker seals disk key to PCRs 0,1,2,3,4,5,6,7. If BIOS or bootloader compromised, PCRs change, disk remains encrypted—protecting against offline attacks and bootkits.
+
+\newpage
