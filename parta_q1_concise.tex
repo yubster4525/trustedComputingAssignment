@@ -1,107 +1,160 @@
 \section{Question 1: TPM Architecture and PCRs in Measured Boot}
 
-\subsection{TPM Internal Architecture}
+\subsection{Introduction}
 
-A Trusted Platform Module (TPM) is a hardware security chip providing cryptographic root of trust. Key components include:
+The Trusted Platform Module (TPM) is a dedicated microcontroller designed to secure hardware through integrated cryptographic keys. As defined by the Trusted Computing Group (TCG), TPM 2.0 provides a hardware-based root of trust that enables secure generation of cryptographic keys, platform integrity measurements, and attestation capabilities. This section explores the internal architecture of TPM and the critical role of Platform Configuration Registers (PCRs) in implementing measured boot.
+
+\subsection{TPM 2.0 Internal Architecture}
+
+The TPM architecture comprises several key components working in concert to provide hardware-based security:
 
 \subsubsection{Root of Trust Components}
 
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Core Root of Trust for Measurement (CRTM)}: First code executed after boot; measures BIOS/UEFI and stores in PCR-0
-    \item \textbf{Root of Trust for Storage (RTS)}: Based on Storage Root Key (SRK) - 2048-bit RSA key never exported; protects key hierarchy
-    \item \textbf{Root of Trust for Reporting (RTR)}: Uses Attestation Identity Key (AIK) for signing attestation quotes
-\end{itemize}
+\paragraph{Core Root of Trust for Measurement (CRTM)}
+The CRTM represents the first code executed during platform boot and serves as the immutable trust anchor. Located in the BIOS Boot Block, it measures the BIOS firmware before execution and extends the measurement into PCR-0. The integrity of all subsequent measurements depends on the CRTM remaining uncompromised.
+
+\paragraph{Root of Trust for Storage (RTS)}
+The RTS is anchored by the Storage Root Key (SRK), a 2048-bit RSA key generated within the TPM and never exposed outside the chip. The SRK forms the root of a key hierarchy where child keys are encrypted by parent keys, creating a cryptographic chain. This hierarchy enables secure key storage with hardware binding, key migration policies, and delegation of authorization.
+
+\paragraph{Root of Trust for Reporting (RTR)}
+The RTR enables remote attestation through Attestation Identity Keys (AIK). Unlike the unique Endorsement Key (EK), multiple AIKs can be created to provide privacy-preserving attestation. AIKs sign attestation quotes containing PCR values, allowing remote verifiers to assess platform integrity without compromising user privacy.
 
 \subsubsection{Cryptographic Engine}
 
-Hardware-based processor providing:
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Key Generation}: Hardware RNG (NIST SP 800-90A); RSA/ECC key generation
-    \item \textbf{Crypto Operations}: RSA sign/verify, ECC operations, AES encryption
-    \item \textbf{Hash Engine}: SHA-1/256/384 for measurements and PCR extends
-\end{itemize}
-
-\subsubsection{Memory}
+The TPM includes a dedicated cryptographic processor implementing:
 
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Non-Volatile (2-8 KB)}: Stores Endorsement Key (EK), SRK, owner authorization, platform policies
-    \item \textbf{Volatile (4-16 KB)}: Active PCR values, loaded keys, session data (reset on reboot)
+    \item \textbf{Random Number Generator}: Hardware RNG compliant with NIST SP 800-90A, providing entropy for cryptographic operations
+    \item \textbf{Asymmetric Cryptography}: RSA (1024/2048 bits) and ECC (P-256) for key generation, signing, and encryption
+    \item \textbf{Symmetric Cryptography}: AES-128/256 for efficient encryption/decryption
+    \item \textbf{Hash Functions}: SHA-1 (legacy), SHA-256, SHA-384, SHA-512 for measurements and integrity verification
 \end{itemize}
+
+\subsubsection{Memory Hierarchy}
+
+\paragraph{Non-Volatile Memory (2-8 KB)}
+Persistent storage containing the Endorsement Key (EK) burned during manufacturing, Storage Root Key (SRK), owner authorization data, platform policies and authorization values, and monotonic counters for replay protection.
+
+\paragraph{Volatile Memory (4-16 KB)}
+Session-based storage reset on each boot containing current PCR values (24+ registers), loaded key handles, active authorization sessions, and temporary objects.
 
 \subsection{Platform Configuration Registers (PCRs)}
 
-\subsubsection{PCR Architecture}
+\subsubsection{PCR Architecture and Properties}
 
-\textbf{Properties}:
+PCRs are special-purpose registers within the TPM with unique characteristics:
+
 \begin{itemize}[leftmargin=*]
-    \item 24+ registers, each 256 bits (SHA-256) or 384 bits (SHA-384)
-    \item \textbf{Write-once per boot}: Cannot be directly written, only extended
-    \item \textbf{Reset on boot}: Initialized to known values (0x00...00)
-    \item \textbf{Tamper-evident}: Any change produces completely different values
+    \item \textbf{Size}: 256 bits (SHA-256) or 384 bits (SHA-384) per register
+    \item \textbf{Count}: Minimum 24 registers (PCR 0-23), implementations may provide more
+    \item \textbf{Write-Once Property}: PCRs cannot be directly written; only extended through cryptographic operations
+    \item \textbf{Initialization}: Set to known values (0x000...000) on platform reset
+    \item \textbf{Tamper-Evidence}: Any modification produces cryptographically different values
 \end{itemize}
 
-\textbf{Usage Convention}:
-\begin{itemize}[leftmargin=*]
-    \item PCR 0: CRTM, BIOS, Platform Extensions
-    \item PCR 1-3: Platform Configuration, Option ROMs
-    \item PCR 4-5: Boot Loader (GRUB), Boot Configuration
-    \item PCR 8-9: OS Kernel, initramfs
-    \item PCR 10-15: System drivers and services
-\end{itemize}
+\subsubsection{PCR Allocation}
+
+The TCG PC Client Platform specification defines standard PCR usage:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{PCR} & \textbf{Contents} \\
+\hline
+0 & CRTM, BIOS code, Host Platform Extensions \\
+\hline
+1-3 & Platform Configuration, Option ROMs \\
+\hline
+4-5 & Boot Loader (MBR, GRUB), Boot Configuration \\
+\hline
+6-7 & State Transitions, Platform Manufacturer Specific \\
+\hline
+8-9 & OS Kernel, initramfs \\
+\hline
+10-15 & OS drivers, services, applications \\
+\hline
+\end{tabular}
+\caption{Standard PCR Allocation}
+\end{table}
 
 \subsection{PCRs in Measured Boot}
 
-\subsubsection{Extend Operation}
+\subsubsection{The Extend Operation}
 
-The core PCR operation:
+The PCR extend operation is the fundamental mechanism for recording measurements:
+
 \begin{equation}
-\text{PCR}_{\text{new}} = \text{SHA256}(\text{PCR}_{\text{old}} \,||\, \text{data\_to\_measure})
+\text{PCR}_{\text{new}} = \text{Hash}(\text{PCR}_{\text{old}} \,||\, \text{Data})
 \end{equation}
 
-\textbf{Properties}: One-way, collision-resistant, deterministic (same boot $\rightarrow$ same PCR values)
+\textbf{Critical Properties}:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{One-way}: Computationally infeasible to reverse
+    \item \textbf{Collision-resistant}: Extremely unlikely that two different boot sequences produce identical PCR values
+    \item \textbf{Deterministic}: Same boot sequence always produces same final PCR values
+    \item \textbf{Order-dependent}: The sequence of measurements matters
+\end{itemize}
 
 \subsubsection{Measured Boot Chain}
 
+Measured boot implements a chain of trust where each component measures the next before transferring control:
+
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Power-On}: PCRs initialized to 0x00...00
-    \item \textbf{CRTM}: Measures BIOS $\rightarrow$ Extend PCR-0
-    \item \textbf{BIOS}: Measures bootloader $\rightarrow$ Extend PCR-4
-    \item \textbf{Bootloader}: Measures kernel $\rightarrow$ Extend PCR-8
-    \item \textbf{Kernel}: Measures drivers $\rightarrow$ Extend PCR-10+
+    \item \textbf{Power-On}: All PCRs initialized to 0x00...00
+
+    \item \textbf{CRTM Execution}: Immutable boot block measures BIOS firmware, extends to PCR-0, transfers control
+
+    \item \textbf{BIOS Execution}: Measures platform configuration $\rightarrow$ PCR-1, option ROMs $\rightarrow$ PCR-2/3, bootloader $\rightarrow$ PCR-4
+
+    \item \textbf{Bootloader}: Measures configuration $\rightarrow$ PCR-5, kernel/initramfs $\rightarrow$ PCR-8/9, launches kernel
+
+    \item \textbf{OS Kernel}: Measures loaded drivers $\rightarrow$ PCR-10+, system services extend additional PCRs
 \end{enumerate}
 
-\textbf{Key Principle}: Each stage measures next stage \textit{before} executing it.
+\textbf{Key Principle}: Each stage must measure the next before executing it, creating a tamper-evident log of the boot process.
 
-\subsection{Security Guarantees and Use Cases}
+\subsection{Security Guarantees and Applications}
 
-\subsubsection{Tamper Detection}
+\subsubsection{Tamper Detection Mechanism}
 
-Any modification changes PCR completely:
-\begin{itemize}[leftmargin=*]
-    \item Original: PCR[0] = 0xAAAA...1111
-    \item Modified BIOS: PCR[0] = 0xBBBB...2222 (completely different)
-\end{itemize}
+PCRs provide cryptographic evidence of platform integrity. Consider a system with legitimate BIOS producing PCR-0 = \texttt{0xA4B7...C3D2}. If an attacker modifies the BIOS, the modified code produces a different hash, causing PCR-0 to become \texttt{0x7F3E...9B1A}. Even single-bit modification produces an avalanche effect, guaranteeing detection through cryptographic properties.
 
-\subsubsection{Use Case 1: Sealed Storage}
+\subsubsection{Use Case 1: Sealed Storage (BitLocker)}
 
-\textbf{BitLocker Example}:
-\begin{itemize}[leftmargin=*]
-    \item Seal disk encryption key to PCRs 0,1,2,3,4,5,6,7
-    \item Key released only if current PCRs match sealed values
-    \item If BIOS/bootloader modified $\rightarrow$ PCR mismatch $\rightarrow$ Disk stays encrypted
-\end{itemize}
+\textbf{Scenario}: Windows BitLocker full-disk encryption
+
+\textbf{Implementation}:
+\begin{enumerate}[leftmargin=*]
+    \item Disk encryption key generated and sealed to PCRs 0,1,2,3,4,5,6,7
+    \item Sealing binds key to current boot configuration
+    \item On boot, TPM checks PCR values
+    \item If PCRs match sealed values $\rightarrow$ Key released, disk decrypted
+    \item If PCRs differ $\rightarrow$ Key withheld, disk remains encrypted
+\end{enumerate}
+
+\textbf{Attack Prevention}: Bootkit installation changes PCR-4 causing unseal failure. BIOS rootkit changes PCR-0 preventing key release. The attacker cannot extract the key, even with physical access to the disk.
 
 \subsubsection{Use Case 2: Remote Attestation}
 
-\textbf{Corporate VPN Example}:
-\begin{itemize}[leftmargin=*]
-    \item TPM signs PCR values with AIK: $\text{Quote} = \text{Sign}(\text{PCRs} \,||\, \text{nonce}, \text{AIK}_{\text{priv}})$
-    \item VPN server verifies quote and compares PCRs to approved values
-    \item Grant access only if platform integrity verified
-\end{itemize}
+\textbf{Scenario}: Enterprise VPN requiring verified client integrity
+
+\textbf{Protocol}:
+\begin{enumerate}[leftmargin=*]
+    \item Client requests VPN access
+    \item Server sends attestation challenge (nonce)
+    \item TPM generates quote: $\text{Quote} = \text{Sign}(\text{PCRs} \,||\, \text{nonce}, \text{AIK})$
+    \item Server verifies AIK certificate, quote signature, nonce freshness, and PCR values
+    \item Access granted only if verification succeeds
+\end{enumerate}
+
+\textbf{Benefits}: Detects compromised clients before network access, prevents malware spread, provides cryptographic proof of compliance, and enables zero-trust architecture with continuous verification.
 
 \subsection{Conclusion}
 
-TPM's hardware-isolated architecture with tamper-evident PCRs enables measured boot by creating irreversible hash chains of boot components. This provides cryptographic proof of platform integrity for both local (sealed storage) and remote (attestation) verification, forming the foundation of hardware-based trusted computing.
+The TPM architecture provides a hardware-isolated secure subsystem with dedicated cryptographic capabilities. Platform Configuration Registers serve as tamper-evident measurement logs, enabling measured boot through cryptographic extend operations. The one-way, collision-resistant nature of PCR extends ensures that any boot-time modification produces detectably different values.
+
+This foundation enables two critical security functions: sealed storage binds secrets to platform state (protecting against offline attacks), while remote attestation provides cryptographic proof of integrity to remote verifiers (enabling zero-trust architectures). Together, these mechanisms form the cornerstone of hardware-based trusted computing, defending against sophisticated boot-level attacks that evade traditional software-only security measures.
 
 \newpage

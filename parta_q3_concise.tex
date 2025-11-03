@@ -1,121 +1,243 @@
 \section{Question 3: TEE Components - ARM TrustZone and Intel SGX}
 
+\subsection{Introduction}
+
+A Trusted Execution Environment (TEE) is an isolated execution context that provides security services to applications running in an untrusted operating system. TEEs achieve isolation through hardware-enforced mechanisms, creating protected enclaves where sensitive code and data remain confidential even when the main OS is compromised. This section examines two prominent TEE implementations: ARM TrustZone, which provides system-wide dual-world isolation, and Intel SGX, which offers per-process enclave-based protection.
+
 \subsection{ARM TrustZone Architecture}
 
-TrustZone creates two parallel execution environments on a single CPU:
+ARM TrustZone technology extends the ARM processor architecture to provide system-wide hardware isolation between a "Secure World" for trusted operations and a "Normal World" for the standard operating environment. This approach enables security-critical functions to execute in complete isolation from the rich OS and applications.
 
 \subsubsection{Core Components}
 
 \paragraph{Processor Security Extensions}
+
+\textbf{Security State Bit (NS)}: At the heart of TrustZone is a single hardware bit added to the processor pipeline that defines the current security state: NS=0 indicates Secure World execution, while NS=1 indicates Normal World execution. This bit is integrated throughout the processor, caches, memory management unit (MMU), and system bus, enforcing isolation at the hardware level.
+
+\textbf{Exception Level Architecture}:
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Secure Monitor (EL3)}: Highest privilege level; mediates transitions between worlds via SMC instruction
-    \item \textbf{Security State Bit (NS)}: NS=0 (Secure World), NS=1 (Normal World)
-    \item \textbf{Dual Worlds}:
-    \begin{itemize}
-        \item Normal World: Rich OS (Android, Linux), untrusted apps
-        \item Secure World: Trusted OS (OP-TEE), Trusted Applications (TAs)
-    \end{itemize}
+    \item \textbf{EL0}: Application level (both worlds)
+    \item \textbf{EL1}: OS Kernel level (Normal World: Linux/Android; Secure World: Trusted OS like OP-TEE)
+    \item \textbf{EL2}: Hypervisor level (virtualization)
+    \item \textbf{EL3}: Secure Monitor - highest privilege level existing only in Secure state
 \end{itemize}
 
-\paragraph{Memory Protection}
+\textbf{Secure Monitor (EL3)}: The Secure Monitor operates at the highest privilege level and acts as the gatekeeper between worlds. It handles world switches via the Secure Monitor Call (SMC) instruction, saving and restoring processor context (registers, MMU configuration, interrupt state) to ensure complete isolation. The monitor validates all world-switch requests to prevent unauthorized access.
+
+\paragraph{Memory Protection Infrastructure}
+
+\textbf{TrustZone Address Space Controller (TZASC)}: The TZASC partitions physical memory into secure and non-secure regions through memory protection tables. Each DRAM region is tagged as secure or non-secure. Any attempt by the Normal World to access secure memory results in a bus error, enforced at the memory controller level before reaching DRAM. This hardware-level protection prevents DMA attacks and ensures memory isolation.
+
+\textbf{TrustZone Protection Controller (TZPC)}: The TZPC extends the security boundary to peripheral devices. Each peripheral (crypto accelerators, secure timers, secure storage controllers, touchscreen drivers) is assigned a security attribute. Secure peripherals can only be accessed from the Secure World, enabling protected I/O paths critical for applications like biometric authentication and secure display.
+
+\paragraph{Trusted OS and Trusted Applications}
+
+The Secure World runs a lightweight Trusted OS (e.g., OP-TEE, Trustonic Kinibi) that manages Trusted Applications (TAs). TAs are isolated modules providing security services: cryptographic key management, secure payment processing, DRM license verification, and biometric template matching. The Trusted OS provides:
 \begin{itemize}[leftmargin=*]
-    \item \textbf{TZASC (Address Space Controller)}: Marks memory as Secure/Non-Secure; Normal World access to Secure memory $\rightarrow$ Bus error
-    \item \textbf{TZPC (Protection Controller)}: Tags peripherals (e.g., Crypto engine = SECURE, UART = NON-SECURE)
+    \item Secure storage API with encryption and integrity protection
+    \item Cryptographic services (AES, RSA, HMAC, key derivation)
+    \item Secure time and monotonic counters
+    \item Inter-TA isolation and communication
 \end{itemize}
 
-\subsubsection{Operational Flow: Mobile Payment}
+\subsubsection{Operational Flow: Mobile Payment System}
 
-\textbf{Scenario}: Banking app signs payment transaction without exposing key to Normal World OS.
+\textbf{Scenario}: A banking application on Android must sign a payment transaction using cryptographic keys that must never be exposed to the Normal World OS, even if Android is compromised by malware.
 
+\textbf{Implementation}:
 \begin{enumerate}[leftmargin=*]
-    \item User initiates payment (Normal World)
-    \item App calls \texttt{TEEC\_InvokeCommand()} $\rightarrow$ SMC instruction
-    \item \textbf{World Switch}: Secure Monitor saves Normal World context, switches to Secure World
-    \item OP-TEE dispatches to Payment TA
-    \item TA: Validates transaction, loads key from secure storage, signs with crypto engine
-    \item \textbf{World Switch Back}: Return to Normal World with signed transaction
-    \item App sends to bank server
+    \item \textbf{Initialization}: Banking app (Normal World) uses GlobalPlatform TEE Client API to open session with Payment TA in Secure World
+
+    \item \textbf{Transaction Request}: User initiates \$500 payment; app constructs transaction data: \texttt{\{recipient, amount, timestamp\}}
+
+    \item \textbf{SMC Invocation}: App calls \texttt{TEEC\_InvokeCommand(session, CMD\_SIGN\_TRANSACTION, params)}. This triggers SMC instruction, trapping to Secure Monitor at EL3
+
+    \item \textbf{World Switch}:
+    \begin{itemize}
+        \item Secure Monitor saves complete Normal World state (registers, PC, stack pointer, MMU config)
+        \item Switches NS bit: NS=1 $\rightarrow$ NS=0
+        \item Configures Secure World MMU (secure memory mapping)
+        \item Transfers control to OP-TEE kernel in Secure World
+    \end{itemize}
+
+    \item \textbf{Secure Execution}:
+    \begin{itemize}
+        \item OP-TEE validates session and dispatches to Payment TA
+        \item Payment TA retrieves private key from secure storage (encrypted blob decrypted inside Secure World)
+        \item TA uses secure crypto engine to compute: \texttt{Signature = HMAC-SHA256(key, transaction)}
+        \item Private key never leaves Secure World memory
+    \end{itemize}
+
+    \item \textbf{Return World Switch}:
+    \begin{itemize}
+        \item TA returns signed transaction to OP-TEE
+        \item OP-TEE triggers SMC to return to Normal World
+        \item Secure Monitor restores Normal World context
+        \item Signed transaction passed back to app
+    \end{itemize}
+
+    \item \textbf{Completion}: App sends signed transaction to bank server for verification
 \end{enumerate}
 
-\textbf{Security}: Private key never exposed to Normal World; even if Android compromised, key remains safe.
+\textbf{Security Guarantee}: Even if Android is fully compromised (kernel rootkit, malicious app, debugger), the private signing key remains in Secure World protected memory. Attackers cannot access secure memory due to TZASC hardware enforcement, and the key only exists in plaintext inside the secure crypto engine.
 
 \subsection{Intel SGX Architecture}
 
-SGX provides per-application isolation via encrypted memory regions (enclaves).
+Intel Software Guard Extensions (SGX) provides a fundamentally different TEE model: per-process isolation through encrypted memory enclaves. Unlike TrustZone's system-wide approach, SGX allows individual applications to create protected memory regions (enclaves) where code and data are encrypted and integrity-protected, even from privileged software like the OS or hypervisor.
 
 \subsubsection{Core Components}
 
 \paragraph{Encrypted Page Cache (EPC)}
+
+The EPC is a special region of DRAM (typically 128MB, expandable to 256MB in SGXv2) reserved exclusively for enclave pages. The Memory Encryption Engine (MEE) sits between the CPU and memory, transparently encrypting all data written to the EPC and decrypting data read from it.
+
+\textbf{Encryption Mechanism}:
 \begin{itemize}[leftmargin=*]
-    \item Special DRAM region (128-256MB) managed exclusively by CPU
-    \item Encrypted by Memory Encryption Engine (MEE) using AES-128
-    \item Plaintext exists only inside CPU package; DRAM contains only ciphertext
-    \item Protected from malicious OS, hypervisor, physical memory attacks
+    \item AES-128-GCM for confidentiality and integrity
+    \item Unique per-page encryption key derived from CPU master key
+    \item Version tree prevents rollback attacks
+    \item Integrity verified on every memory access
 \end{itemize}
 
-\paragraph{SGX Instructions}
+\textbf{Security Properties}:
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Management} (Ring 0): \texttt{ECREATE} (create enclave), \texttt{EADD} (add page), \texttt{EEXTEND} (measure page), \texttt{EINIT} (finalize)
-    \item \textbf{Execution} (Ring 3): \texttt{EENTER} (enter enclave), \texttt{EEXIT} (exit enclave)
+    \item Plaintext data exists only in CPU package (registers, L1/L2/L3 cache)
+    \item DRAM contains only ciphertext and authentication tags
+    \item Protected from cold boot attacks, DMA attacks, physical memory probing
+    \item OS and hypervisor cannot access enclave memory (bus encryption ensures this)
+\end{itemize}
+
+\paragraph{SGX Instruction Set Extensions}
+
+\textbf{Privileged Instructions} (Ring 0 - OS/Hypervisor):
+\begin{itemize}[leftmargin=*]
+    \item \texttt{ECREATE}: Allocate EPC pages for new enclave, initialize SECS (SGX Enclave Control Structure)
+    \item \texttt{EADD}: Add page to enclave, assign page type (code, data, TCS)
+    \item \texttt{EEXTEND}: Incrementally measure page contents into MRENCLAVE
+    \item \texttt{EINIT}: Finalize enclave, verify measurement, lock enclave into initialized state
+\end{itemize}
+
+\textbf{Unprivileged Instructions} (Ring 3 - User Application):
+\begin{itemize}[leftmargin=*]
+    \item \texttt{EENTER}: Enter enclave execution; switch to enclave code, enable EPC access
+    \item \texttt{EEXIT}: Exit enclave; return to untrusted application code
+    \item \texttt{EGETKEY}: Derive enclave-specific cryptographic keys from CPU fuses
+    \item \texttt{EREPORT}: Generate attestation report proving enclave identity
 \end{itemize}
 
 \paragraph{Enclave Measurement (MRENCLAVE)}
+
+MRENCLAVE is a 256-bit cryptographic hash that uniquely identifies an enclave's initial code and data:
+
 \begin{lstlisting}
-For each page added:
-    For each 256-byte chunk:
-        MRENCLAVE = SHA256(MRENCLAVE || chunk || offset)
+MRENCLAVE = 0x000...000  // Initial value
+For each page added during enclave build:
+    For each 256-byte chunk of page:
+        MRENCLAVE = SHA256(MRENCLAVE || chunk || offset || flags)
+// Final MRENCLAVE frozen at EINIT
 \end{lstlisting}
 
-256-bit hash uniquely identifying enclave code/data; used for attestation and sealing.
+This measurement serves two purposes:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Attestation}: Remote parties verify they're communicating with the expected enclave code
+    \item \textbf{Sealing}: Enclaves derive encryption keys bound to MRENCLAVE, ensuring sealed data can only be unsealed by the same enclave version
+\end{itemize}
+
+\paragraph{SGX Attestation}
+
+\textbf{Local Attestation}: Enables one enclave to verify another enclave on the same platform using \texttt{EREPORT} and \texttt{EGETKEY}.
+
+\textbf{Remote Attestation}: Proves enclave identity to remote parties:
+\begin{enumerate}[leftmargin=*]
+    \item Enclave generates \texttt{REPORT} containing MRENCLAVE and user data (e.g., enclave public key)
+    \item Quoting Enclave (Intel-signed) converts REPORT to remotely-verifiable QUOTE
+    \item QUOTE signed by Intel Attestation Service (IAS) root key
+    \item Remote verifier checks: Intel signature, MRENCLAVE matches expected value, report data (establishing secure channel)
+\end{enumerate}
 
 \subsubsection{Operational Flow: Confidential ML Inference}
 
-\textbf{Scenario}: Cloud ML service processes sensitive medical images without exposing to provider.
+\textbf{Scenario}: A healthcare provider wants to use a cloud-based ML service for cancer detection from medical images, but patient data cannot be exposed to the cloud provider or untrusted cloud OS.
 
+\textbf{Implementation}:
+
+\textbf{Phase 1 - Setup}:
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Setup}: Provider builds enclave, publishes MRENCLAVE = a3f8c2...b4d6
-    \item \textbf{Runtime}:
+    \item ML service provider develops enclave containing inference model
+    \item Enclave built with \texttt{ECREATE, EADD, EEXTEND, EINIT}
+    \item Provider publishes MRENCLAVE = \texttt{0xa3f8c2...b4d6} and source code for verification
+    \item Independent auditors verify code matches published MRENCLAVE
+\end{enumerate}
+
+\textbf{Phase 2 - Attestation}:
+\begin{enumerate}[leftmargin=*]
+    \item Hospital client connects to cloud service
+    \item Client requests attestation quote from enclave
+    \item Enclave generates \texttt{EREPORT} with MRENCLAVE and enclave's ephemeral public key
+    \item Quoting Enclave signs report, producing Intel-verified QUOTE
+    \item Client verifies:
     \begin{itemize}
-        \item Server creates enclave (\texttt{ECREATE, EADD, EINIT})
-        \item Client requests attestation
-        \item Enclave generates report; Quoting Enclave signs $\rightarrow$ Quote
-        \item Client verifies Intel signature + MRENCLAVE match
-        \item Secure channel established (TLS to enclave)
+        \item Intel signature (authentic SGX platform)
+        \item MRENCLAVE matches audited model (correct code)
+        \item Timestamp freshness
     \end{itemize}
-    \item Client encrypts medical image, sends to server
-    \item \texttt{EENTER}: Decrypt inside enclave, run ML inference, encrypt result, \texttt{EEXIT}
+    \item Client establishes TLS channel directly to enclave using attested public key
+\end{enumerate}
+
+\textbf{Phase 3 - Confidential Processing}:
+\begin{enumerate}[leftmargin=*]
+    \item Client encrypts medical image with TLS session key
+    \item Encrypted image sent to cloud (cloud provider sees only ciphertext)
+    \item Application calls \texttt{EENTER} to enter enclave
+    \item \textbf{Inside Enclave}:
+    \begin{itemize}
+        \item Decrypt image (plaintext exists only in EPC, encrypted in DRAM)
+        \item Run ML inference model
+        \item Generate cancer detection result
+        \item Encrypt result with TLS key
+    \end{itemize}
+    \item \texttt{EEXIT} returns encrypted result to untrusted application
+    \item Application forwards encrypted result to client
     \item Client decrypts result
 \end{enumerate}
 
-\textbf{Security}: Data encrypted in DRAM; cloud provider cannot see plaintext.
+\textbf{Security Guarantee}: Medical images exist in plaintext only inside enclave (CPU + EPC). Cloud provider OS, hypervisor, and administrators cannot access plaintext data even with root/physical access. MEE encryption protects against DRAM probing, cold boot attacks, and compromised firmware.
 
 \subsection{Comparison: TrustZone vs SGX}
 
 \begin{table}[h]
 \centering
 \small
-\begin{tabular}{|l|p{5cm}|p{5cm}|}
+\begin{tabular}{|l|p{5.5cm}|p{5.5cm}|}
 \hline
 \textbf{Aspect} & \textbf{ARM TrustZone} & \textbf{Intel SGX} \\
 \hline
-Isolation & System-wide (two worlds) & Per-application (enclaves) \\
+Isolation Model & System-wide dual worlds & Per-process enclaves \\
 \hline
-TCB Size & Larger (Trusted OS) & Smaller (enclave only) \\
+TCB Size & Larger: Trusted OS + TAs (MBs) & Smaller: Individual enclave (KBs-MBs) \\
 \hline
-Memory & TZASC/TZPC (MB-GB) & MEE encryption (limited EPC) \\
+Memory Protection & TZASC/TZPC physical partitioning & MEE encryption, all memory untrusted \\
 \hline
-Attestation & Limited (vendor-specific) & Built-in (Intel IAS) \\
+Threat Model & Protects from compromised Normal World OS & Protects from OS, hypervisor, privileged malware, physical attacks \\
 \hline
-Secure UI & Yes (secure display/touch) & No (no I/O in enclave) \\
+I/O Access & Secure peripherals (crypto, display, biometrics) & No direct I/O; OCALL to untrusted app \\
 \hline
-Use Cases & Mobile payments, DRM, biometrics & Cloud confidential computing \\
+Attestation & Limited, vendor-specific & Built-in remote attestation (IAS/DCAP) \\
+\hline
+Performance Overhead & Low (1-5$\mu$s world switch) & Low-moderate (10-15\% for memory-intensive workloads) \\
+\hline
+Use Cases & Mobile payments, DRM, biometrics, secure boot & Cloud confidential computing, secure multi-party computation \\
 \hline
 \end{tabular}
-\caption{TrustZone vs SGX Comparison}
+\caption{Comprehensive Comparison of TrustZone and SGX}
 \end{table}
 
 \subsection{Conclusion}
 
-ARM TrustZone and Intel SGX represent distinct TEE approaches. TrustZone provides system-wide isolation suitable for mobile scenarios requiring secure UI. SGX offers fine-grained isolation with strong cryptographic guarantees, ideal for cloud confidential computing. Both enable secure execution in untrusted environments with different trust models and performance characteristics.
+ARM TrustZone and Intel SGX represent two distinct philosophical approaches to trusted execution environments. TrustZone provides a system-wide security partition with a hardened Trusted OS managing security services, optimized for scenarios requiring secure I/O (payments, biometrics). SGX offers fine-grained per-application isolation with cryptographic memory protection, ideal for cloud scenarios where the infrastructure provider is untrusted.
+
+TrustZone's strength lies in its integration with the platform's security peripherals and lower performance overhead for world switches, making it prevalent in mobile and embedded systems. SGX's advantage is its stronger threat model protecting against privileged attackers and physical access, combined with robust remote attestation enabling cloud confidential computing.
+
+Modern security architectures increasingly combine multiple TEE technologies: TrustZone for platform security services, SGX for workload-specific confidential computing, and TPM for boot integrity and attestation. This defense-in-depth approach provides comprehensive protection across the system lifecycle.
 
 \newpage

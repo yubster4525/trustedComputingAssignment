@@ -1,111 +1,196 @@
 \section{Question 2: TPM-Based Remote Attestation}
 
+\subsection{Introduction}
+
+Remote attestation is a security mechanism that enables a platform to cryptographically prove its integrity state to a remote verifier. Using the TPM as a hardware root of trust, attestation provides verifiable evidence that a system is running known, unmodified software. This capability is fundamental to zero-trust security architectures, confidential computing, and compliance verification in distributed environments.
+
 \subsection{Remote Attestation Protocol}
 
-Remote attestation enables a platform to cryptographically prove its integrity to a remote verifier using TPM as hardware root of trust.
+\subsubsection{Key Cryptographic Components}
 
-\subsubsection{Key Components}
+\paragraph{Endorsement Key (EK)}
+The Endorsement Key is a unique 2048-bit RSA key pair embedded in the TPM during manufacturing. The EK private key never leaves the TPM hardware and serves as the platform's cryptographic identity. The EK certificate, signed by the TPM manufacturer, provides a trust anchor linking the physical TPM to its provenance.
 
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Endorsement Key (EK)}: Unique 2048-bit RSA key embedded during manufacturing; never leaves TPM
-    \item \textbf{Attestation Identity Key (AIK)}: Privacy-preserving pseudonym for EK; signs attestation quotes
-    \item \textbf{Quote}: Signed statement of PCR values including verifier's nonce for freshness
-\end{itemize}
+\paragraph{Attestation Identity Key (AIK)}
+To preserve user privacy and prevent tracking across different attestation contexts, the TPM generates Attestation Identity Keys as pseudonyms for the EK. Multiple AIKs can be created for different relying parties, preventing correlation of a user's activities across services. AIKs are certified by a Privacy Certificate Authority (Privacy CA) after verifying the association with a legitimate EK.
 
-\subsubsection{Attestation Flow}
+\paragraph{Attestation Quote}
+An attestation quote is a digitally signed data structure containing the current PCR values, a nonce provided by the verifier (for freshness), firmware version information, and additional metadata. The quote is signed with the AIK private key, creating unforgeable evidence of the platform's state at attestation time.
 
-\paragraph{Phase 1: One-Time AIK Setup}
+\subsubsection{Two-Phase Attestation Protocol}
+
+\paragraph{Phase 1: AIK Provisioning (One-Time Setup)}
+
 \begin{enumerate}[leftmargin=*]
-    \item Platform generates AIK in TPM
-    \item Privacy CA verifies EK certificate chain
-    \item CA issues AIK certificate
+    \item Platform generates a new AIK key pair within the TPM
+    \item Platform obtains EK certificate from TPM and AIK public key
+    \item Platform submits certification request to Privacy CA containing:
+    \begin{itemize}
+        \item EK certificate (proving genuine TPM)
+        \item AIK public key (to be certified)
+        \item Proof of AIK ownership (signed challenge)
+    \end{itemize}
+    \item Privacy CA validates the EK certificate chain against manufacturer root CA
+    \item Upon validation, Privacy CA issues AIK certificate binding the AIK to the verified TPM
 \end{enumerate}
 
-\paragraph{Phase 2: Attestation}
+\paragraph{Phase 2: Runtime Attestation}
+
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Challenge}: Verifier sends random nonce + PCR selection
-    \item \textbf{Quote Generation}: TPM executes:
+    \item \textbf{Challenge}: Verifier generates random nonce and specifies PCR selection (e.g., PCRs 0-9)
+
+    \item \textbf{Quote Generation}: TPM creates attestation quote:
     \begin{lstlisting}[language=C]
-Quote = {
-    PCR_values,
-    Nonce,
-    Firmware_version
+Quote_Structure = {
+    magic: TPM_GENERATED,
+    type: TPM_ST_ATTEST_QUOTE,
+    qualifiedSigner: AIK_Name,
+    extraData: Nonce,
+    clockInfo: {clock, resetCount, restartCount},
+    firmwareVersion: 0x....,
+    pcrSelect: {sha256: [0,1,2,3,4,5,6,7,8,9]},
+    pcrDigest: SHA256(PCR[0]||PCR[1]||...||PCR[9])
 }
-Signature = Sign(Quote, AIK_private)
+Signature = TPM2_Sign(Quote_Structure, AIK_Handle)
     \end{lstlisting}
-    \item \textbf{Response}: Platform sends \{Quote, Signature, AIK\_cert\}
-    \item \textbf{Verification}: Verifier:
+
+    \item \textbf{Response Transmission}: Platform sends attestation evidence:
     \begin{itemize}
-        \item Verifies AIK certificate (from trusted CA)
-        \item Verifies quote signature with AIK public key
-        \item Validates nonce matches (freshness check)
-        \item Compares PCR values to "golden" approved values
+        \item Attestation quote structure
+        \item AIK signature over the quote
+        \item AIK certificate
+        \item Optional: Event log detailing what was measured into each PCR
     \end{itemize}
-    \item \textbf{Decision}: Grant/Deny access based on results
+
+    \item \textbf{Verification Process}: Verifier performs multi-step validation:
+    \begin{itemize}
+        \item \textbf{Certificate Chain Validation}: Verify AIK certificate chains to trusted Privacy CA
+        \item \textbf{Signature Verification}: Validate signature using AIK public key from certificate
+        \item \textbf{Freshness Check}: Confirm nonce in quote matches sent challenge
+        \item \textbf{Integrity Assessment}: Compare PCR digest against reference "golden" measurements
+        \item \textbf{Policy Evaluation}: Check additional constraints (firmware version, reset count limits)
+    \end{itemize}
+
+    \item \textbf{Authorization Decision}: Grant or deny access based on attestation result
 \end{enumerate}
 
 \subsection{Security Properties}
 
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Authenticity}: Evidence from genuine TPM (EK verified by manufacturer)
-    \item \textbf{Integrity}: PCR values prove unmodified boot sequence
-    \item \textbf{Freshness}: Random nonce prevents replay attacks
-    \item \textbf{Privacy}: AIK protects user identity across contexts
-\end{itemize}
+\subsubsection{Authenticity}
+The attestation evidence originates from a genuine TPM, verified through the manufacturer-signed EK certificate. Hardware-based key storage prevents attackers from forging attestation quotes, even with OS-level control.
 
-\subsection{Use Case: Azure Cloud VM Attestation}
+\subsubsection{Integrity}
+PCR values provide cryptographic proof of the measured boot sequence. Any modification to BIOS, bootloader, kernel, or drivers results in different PCR values, detectable during verification.
+
+\subsubsection{Freshness}
+The inclusion of a verifier-provided nonce ensures quotes cannot be replayed. An attacker capturing a valid attestation quote cannot reuse it, as the nonce will not match subsequent challenges.
+
+\subsubsection{Privacy Preservation}
+AIKs enable attestation without revealing the platform's unique identity (EK) to relying parties. Different AIKs can be used for different services, preventing cross-context tracking while maintaining trust in attestation.
+
+\subsection{Real-World Use Case: Azure Confidential Computing}
 
 \subsubsection{Scenario}
 
-Financial services company (TechCorp) uses Azure VMs for critical workloads. Must ensure VMs run only verified, unmodified software before accessing sensitive data.
+A financial services company (TechCorp) deploys critical transaction processing workloads on Microsoft Azure. Regulatory compliance (PCI-DSS) requires cryptographic proof that VMs are running only approved, unmodified software before accessing customer credit card data. The company must defend against both external attackers and potential insider threats with cloud infrastructure access.
 
-\subsubsection{Implementation}
+\subsubsection{Architecture and Implementation}
 
-\paragraph{Setup}
+\paragraph{Infrastructure Setup}
 \begin{itemize}[leftmargin=*]
-    \item Azure provisions VM with virtual TPM (vTPM)
-    \item Measured boot: UEFI $\rightarrow$ PCR 0,7; Bootloader $\rightarrow$ PCR 4; Kernel $\rightarrow$ PCR 8,9
+    \item Azure provisions VMs with virtual TPM (vTPM) 2.0
+    \item Secure Boot enabled; Measured Boot configured
+    \item Boot measurements: UEFI firmware $\rightarrow$ PCR 0,7; Bootloader $\rightarrow$ PCR 4; Kernel $\rightarrow$ PCR 8,9; IMA driver measurements $\rightarrow$ PCR 10
+    \item Reference PCR values for approved configuration stored in attestation policy
 \end{itemize}
 
-\paragraph{Attestation Flow}
+\paragraph{Attestation-Gated Access Flow}
+
 \begin{enumerate}[leftmargin=*]
-    \item Finance app requests database credentials from Azure Key Vault
-    \item Key Vault triggers attestation: generates nonce, requests quote from VM's vTPM
-    \item VM's vTPM generates quote with current PCR values
-    \item Azure Attestation Service verifies:
+    \item Transaction processing application starts and requests database credentials from Azure Key Vault
+
+    \item Key Vault intercepts request and triggers attestation via Azure Attestation Service (AAS)
+
+    \item AAS generates fresh nonce and sends attestation challenge to VM's vTPM
+
+    \item VM's vTPM generates quote containing current PCR values and signs with AIK
+
+    \item AAS performs comprehensive verification:
     \begin{itemize}
-        \item AIK certificate validity
-        \item Quote signature
-        \item Nonce freshness
-        \item PCRs match attestation policy
+        \item Validates AIK certificate issued by Azure Privacy CA
+        \item Verifies quote signature cryptographically
+        \item Confirms nonce freshness (within 60-second window)
+        \item Compares PCR values against attestation policy:
+        \begin{lstlisting}
+PCR[0,7]: UEFI firmware hash == approved_uefi_hash
+PCR[4]:   Bootloader hash == grub2_signed_hash
+PCR[8,9]: Kernel hash == ubuntu_22.04_kernel_5.15.0
+PCR[10]:  IMA digest == policy_approved_binaries
+        \end{lstlisting}
     \end{itemize}
-    \item \textbf{If trusted}: Issue token $\rightarrow$ Key Vault releases secrets
-    \item \textbf{If untrusted}: Deny access + security alert + VM quarantine
+
+    \item \textbf{Success Path}: If all checks pass, AAS issues signed JWT token containing:
+    \begin{itemize}
+        \item VM identity
+        \item Attestation timestamp
+        \item PCR claims
+        \item Token expiration (5 minutes)
+    \end{itemize}
+    Application presents token to Key Vault, which releases database credentials.
+
+    \item \textbf{Failure Path}: If attestation fails:
+    \begin{itemize}
+        \item Access denied; credentials withheld
+        \item Security alert generated with failure reason
+        \item VM automatically tagged for quarantine
+        \item SOC team notified for investigation
+    \end{itemize}
 \end{enumerate}
 
-\subsubsection{Attack Scenario Prevented}
+\subsubsection{Attack Scenario: Bootkit Installation}
+
+Consider an attack where a malicious insider or compromised account attempts to subvert the VM:
 
 \begin{enumerate}[leftmargin=*]
-    \item Attacker compromises Azure account, modifies VM bootloader with malicious code
-    \item VM reboots, bootloader measured differently: PCR[4] changes
-    \item App requests credentials $\rightarrow$ Attestation triggered
-    \item PCR[4] mismatch detected $\rightarrow$ \textbf{Access DENIED}
-    \item Security team alerted, VM isolated
+    \item \textbf{Attack}: Attacker gains access to Azure subscription and modifies VM's boot disk, injecting bootkit into GRUB bootloader to exfiltrate credit card data
+
+    \item \textbf{VM Reboot}: Modified bootloader executes; vTPM measures bootloader during measured boot
+
+    \item \textbf{PCR Deviation}: PCR[4] now contains hash of modified bootloader instead of legitimate GRUB:
+    \begin{lstlisting}
+Expected: PCR[4] = 0xa4f8c2...  (legitimate GRUB)
+Actual:   PCR[4] = 0x3b9e71...  (infected bootkit)
+    \end{lstlisting}
+
+    \item \textbf{Attestation Trigger}: Application requests database credentials, triggering attestation
+
+    \item \textbf{Detection}: AAS detects PCR[4] mismatch during verification
+
+    \item \textbf{Denial}: \textbf{Access DENIED} - Application never receives credentials
+
+    \item \textbf{Response}: Automated quarantine, SOC alert, forensic snapshot captured
 \end{enumerate}
 
-\textbf{Outcome}: Without attestation, attacker steals data. With attestation, attack detected immediately with zero data loss.
+\textbf{Impact}: Without attestation, bootkit would successfully steal data. With attestation, attack detected immediately with zero data exposure, demonstrating defense-in-depth against sophisticated boot-level compromise.
 
-\subsubsection{Benefits}
+\subsubsection{Benefits Realized}
 
 \begin{itemize}[leftmargin=*]
-    \item Detects boot-level malware (bootkits, BIOS rootkits)
-    \item Cryptographic proof of compliance for regulations
-    \item Zero-trust architecture: Always verify, never trust
-    \item Automated response to compromises
+    \item \textbf{Boot-Level Threat Detection}: Identifies BIOS rootkits, bootkits, and firmware malware that evade traditional endpoint security
+
+    \item \textbf{Compliance Evidence}: Cryptographic audit trail proving only approved software accessed sensitive data (PCI-DSS 2.6, 6.5)
+
+    \item \textbf{Zero-Trust Architecture}: Continuous verification eliminates implicit trust; "never trust, always verify"
+
+    \item \textbf{Automated Remediation}: Policy violations trigger automated quarantine and alerting without human intervention
+
+    \item \textbf{Insider Threat Mitigation}: Even cloud administrators cannot bypass attestation controls
 \end{itemize}
 
 \subsection{Conclusion}
 
-TPM-based remote attestation provides cryptographic proof of platform integrity using hardware roots of trust (EK), privacy-preserving credentials (AIK), and tamper-evident measurements (PCRs). The enterprise cloud use case demonstrates prevention of sophisticated boot-level attacks that evade traditional security, enabling zero-trust architectures in distributed systems.
+TPM-based remote attestation provides a hardware-rooted mechanism for verifying platform integrity in distributed systems. By leveraging the TPM's cryptographic capabilities (EK for authenticity, AIK for privacy, PCRs for integrity), attestation enables verifiers to make trust decisions based on unforgeable evidence rather than implicit trust.
+
+The Azure confidential computing use case demonstrates practical deployment at enterprise scale, showing how attestation prevents sophisticated boot-level attacks that evade traditional security controls. As cloud and edge computing expand, hardware-based attestation becomes essential for establishing trust boundaries in zero-trust architectures, supporting confidential computing workloads, and meeting regulatory requirements for cryptographic proof of system integrity.
 
 \newpage
