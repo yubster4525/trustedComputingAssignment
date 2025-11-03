@@ -1,0 +1,273 @@
+\section{Question 4: TPM vs TEE Comparison}
+
+\subsection*{Question}
+\textit{Compare TPM and TEE based on trust boundary, execution context, and use cases.}
+
+\subsection{Introduction}
+
+Trusted Platform Module (TPM) and Trusted Execution Environment (TEE) are complementary trusted computing technologies that address different aspects of platform security. While both establish hardware-based roots of trust, they differ fundamentally in their architecture, capabilities, and intended use cases.
+
+\subsection{Trust Boundary Analysis}
+
+\subsubsection{TPM Trust Boundary}
+
+\paragraph{Physical Boundary}
+\begin{itemize}[leftmargin=*]
+    \item TPM is a \textbf{discrete hardware component} (or firmware implementation)
+    \item Physically separate from main processor
+    \item Connected via LPC, SPI, or I²C bus
+\end{itemize}
+
+\paragraph{Trust Scope}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Trusted}: TPM chip internals, NV memory, crypto engine
+    \item \textbf{Untrusted}: Everything outside TPM (CPU, DRAM, OS, applications)
+\end{itemize}
+
+\paragraph{Properties}
+\begin{itemize}[leftmargin=*]
+    \item Complete isolation from main processor
+    \item Limited attack surface (simple command interface)
+    \item Passive security (measures and reports, doesn't execute code)
+    \item Bus communication can be monitored (but encrypted/authenticated)
+\end{itemize}
+
+\subsubsection{TEE Trust Boundary}
+
+\paragraph{Logical Boundary}
+\begin{itemize}[leftmargin=*]
+    \item TEE is an \textbf{isolated execution environment within main processor}
+    \item Uses hardware features (CPU modes, memory protection)
+    \item No physical separation from untrusted code
+\end{itemize}
+
+\paragraph{Trust Scope (ARM TrustZone)}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Trusted}: Secure World (Trusted OS, Trusted Applications)
+    \item \textbf{Untrusted}: Normal World (Rich OS, applications)
+\end{itemize}
+
+\paragraph{Trust Scope (Intel SGX)}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Trusted}: Enclave code and data (while in CPU)
+    \item \textbf{Untrusted}: OS, hypervisor, BIOS, other processes
+\end{itemize}
+
+\paragraph{Properties}
+\begin{itemize}[leftmargin=*]
+    \item Software-hardware co-design
+    \item Larger TCB (includes Trusted OS or enclave runtime)
+    \item Active security (executes code in isolated environment)
+    \item Shared resources with untrusted code (side-channel risks)
+\end{itemize}
+
+\subsubsection{Comparative Summary}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|p{3cm}|p{5cm}|p{5cm}|}
+\hline
+\textbf{Aspect} & \textbf{TPM} & \textbf{TEE} \\
+\hline
+Boundary Type & Physical (hardware chip) & Logical (CPU isolation) \\
+\hline
+Isolation & Separate processor & CPU security states \\
+\hline
+TCB Size & Very small ($\sim$100KB) & Larger (MB-scale) \\
+\hline
+Attack Surface & Minimal & Moderate \\
+\hline
+Trust in CPU & Not required & Required \\
+\hline
+Side-Channels & Low risk & Higher risk \\
+\hline
+\end{tabular}
+\caption{Trust Boundary Comparison}
+\end{table}
+
+\subsection{Execution Context Comparison}
+
+\subsubsection{TPM Execution Context}
+
+\paragraph{Processing Capabilities}
+\begin{itemize}[leftmargin=*]
+    \item Cryptographic operations (RSA, ECC, HMAC, hash)
+    \item Key management (generation, wrapping, hierarchy)
+    \item PCR operations (read, extend, quote)
+    \item Sealed storage (seal/unseal with policy)
+    \item \textbf{Cannot}: Execute arbitrary code, perform general computation
+\end{itemize}
+
+\paragraph{Execution Model}
+\begin{itemize}[leftmargin=*]
+    \item Command-response architecture (stateless)
+    \item No operating system (bare-metal firmware)
+    \item Limited resources: $\sim$8-16 MHz processor, few KB memory
+    \item Sequential processing (one command at a time)
+\end{itemize}
+
+\paragraph{Performance}
+\begin{itemize}[leftmargin=*]
+    \item RSA 2048-bit Sign: 500-1000 ms
+    \item ECC P-256 Sign: 100-300 ms
+    \item SHA-256 Hash (1KB): 10-50 ms
+    \item PCR Extend: 20-100 ms
+\end{itemize}
+
+\subsubsection{TEE Execution Context}
+
+\paragraph{Processing Capabilities (TrustZone)}
+\begin{itemize}[leftmargin=*]
+    \item Full CPU capabilities (ARM instruction set, SIMD)
+    \item Rich execution environment (Trusted OS, thread scheduling)
+    \item Secure peripherals (crypto accelerators, secure storage)
+    \item Arbitrary code execution (Trusted Applications)
+\end{itemize}
+
+\paragraph{Processing Capabilities (SGX)}
+\begin{itemize}[leftmargin=*]
+    \item Full x86-64 instruction set (SSE, AVX)
+    \item Complex computations (ML inference, database queries)
+    \item Cryptographic libraries in enclave
+    \item No direct I/O (must use OCALL to untrusted code)
+\end{itemize}
+
+\paragraph{Performance}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{TrustZone}: World switch 1-5 $\mu$s, near-native CPU speed
+    \item \textbf{SGX}: EENTER/EEXIT $\sim$100-300 cycles, memory 10-15\% overhead
+    \item Both support high-throughput, real-time processing
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{|p{3.5cm}|p{3cm}|p{3cm}|p{3cm}|}
+\hline
+\textbf{Aspect} & \textbf{TPM} & \textbf{TEE (TZ)} & \textbf{TEE (SGX)} \\
+\hline
+CPU Speed & 8-16 MHz & GHz (full) & GHz (full) \\
+\hline
+Memory & KB-scale & MB-scale & MB-scale (EPC) \\
+\hline
+OS Environment & None & Trusted OS & Library OS \\
+\hline
+Arbitrary Code & No & Yes & Yes \\
+\hline
+I/O Access & None & Secure periph. & None (via OCALL) \\
+\hline
+Performance & Very slow & Near-native & Near-native \\
+\hline
+\end{tabular}
+\caption{Execution Context Comparison}
+\end{table}
+
+\subsection{Use Case Analysis}
+
+\subsubsection{TPM Primary Use Cases}
+
+\paragraph{1. Measured Boot and Attestation}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Scenario}: Enterprise laptop with full-disk encryption
+    \item \textbf{TPM Role}:
+    \begin{itemize}
+        \item Measures boot chain $\rightarrow$ Extends PCRs
+        \item Seals disk key to PCR values
+        \item Remote attestation to IT admin
+    \end{itemize}
+    \item \textbf{Why TPM}: Persists through reboots, hardware root of trust, platform-wide view
+    \item \textbf{Why Not TEE}: TEE starts after OS boot (too late for firmware measurement)
+\end{itemize}
+
+\paragraph{2. Cryptographic Key Storage}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Scenario}: IoT device with authentication credentials
+    \item \textbf{TPM Role}:
+    \begin{itemize}
+        \item Key hierarchy: SRK $\rightarrow$ Device ID $\rightarrow$ TLS cert key
+        \item Sign TLS handshake inside TPM
+        \item Private key never in RAM
+    \end{itemize}
+    \item \textbf{Why TPM}: Hardware-bound keys, dictionary attack protection, long-term storage
+    \item \textbf{Why Not TEE}: Loses state on reboot, larger attack surface
+\end{itemize}
+
+\subsubsection{TEE Primary Use Cases}
+
+\paragraph{1. Mobile Payment (TrustZone)}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Scenario}: Smartphone contactless payment
+    \item \textbf{TEE Role}:
+    \begin{itemize}
+        \item Secure UI displays amount
+        \item User enters PIN via secure touchscreen
+        \item Payment TA signs transaction
+        \item Normal World OS compromise cannot steal credentials
+    \end{itemize}
+    \item \textbf{Why TEE}: Secure UI, real-time performance, runtime isolation
+    \item \textbf{Why Not TPM}: No UI capability, too slow (seconds vs milliseconds)
+\end{itemize}
+
+\paragraph{2. Confidential Cloud Computing (SGX)}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Scenario}: Medical research on encrypted patient data in cloud
+    \item \textbf{TEE Role}:
+    \begin{itemize}
+        \item Hospital encrypts MRI scans, uploads to AWS
+        \item Research enclave attests identity to hospital
+        \item Data decrypted inside enclave
+        \item ML analysis performed
+        \item Cloud provider cannot see plaintext
+    \end{itemize}
+    \item \textbf{Why TEE}: Protects data from cloud provider, full computational capability
+    \item \textbf{Why Not TPM}: TPM doesn't execute code, just stores keys
+\end{itemize}
+
+\subsubsection{Combined Use Case: TPM + TEE}
+
+\paragraph{Secure Enterprise Workstation}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Boot (TPM)}: Measured boot $\rightarrow$ Seals disk key to PCRs
+    \item \textbf{Runtime (TEE/SGX)}: Document processing in enclave
+    \item \textbf{Attestation}: Both TPM quote (boot integrity) + SGX quote (app integrity)
+    \item \textbf{Result}: Defense-in-depth, covers full stack (boot $\rightarrow$ runtime)
+\end{itemize}
+
+\subsection{Selection Criteria}
+
+\subsubsection{Choose TPM When:}
+\begin{itemize}[leftmargin=*]
+    \item Need to verify boot integrity
+    \item Require long-term key storage
+    \item Platform-level attestation required
+    \item Disk encryption key protection
+    \item Low power budget (IoT devices)
+\end{itemize}
+
+\subsubsection{Choose TEE When:}
+\begin{itemize}[leftmargin=*]
+    \item Need to execute trusted code at runtime
+    \item Require high computational throughput
+    \item Secure UI needed (payments, biometrics)
+    \item Processing sensitive data in real-time
+    \item Cloud confidential computing
+\end{itemize}
+
+\subsubsection{Use Both When:}
+\begin{itemize}[leftmargin=*]
+    \item Maximum security required (defense-in-depth)
+    \item Both boot-time AND runtime protection needed
+    \item Comprehensive attestation (platform + application)
+    \item High-value targets (government, finance, healthcare)
+\end{itemize}
+
+\subsection{Conclusion}
+
+TPM and TEE serve complementary roles in trusted computing. TPM excels at providing a hardware root of trust for platform integrity, measured boot, and secure key storage, operating as a passive measurement and storage device with minimal attack surface. TEE provides an active execution environment for trusted applications, offering runtime isolation with full computational capabilities.
+
+The trust boundary in TPM is physical (discrete chip), while TEE's boundary is logical (CPU isolation modes). TPM's execution context is limited to cryptographic operations and state storage, while TEE supports arbitrary code execution with near-native performance. Use cases differ accordingly: TPM for boot attestation and long-term storage, TEE for runtime processing of sensitive data.
+
+Modern secure systems increasingly deploy both technologies in tandem: TPM establishes trust from the first instruction, while TEE maintains isolation throughout runtime. This combination provides comprehensive protection across the full system lifecycle from power-on to shutdown.
+
+\newpage

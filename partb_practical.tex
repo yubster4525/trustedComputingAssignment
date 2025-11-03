@@ -1,0 +1,470 @@
+\section{Introduction}
+
+This practical demonstration showcases the capabilities of TPM 2.0 for secure key storage and data sealing using Platform Configuration Registers (PCRs). The experiment demonstrates how data can be cryptographically bound to system state, preventing access when the platform configuration changes.
+
+\subsection{Objective}
+
+The objectives of this practical exercise are:
+
+\begin{enumerate}[leftmargin=*]
+    \item Create TPM key hierarchy under owner authorization
+    \item Establish PCR baseline representing trusted boot state
+    \item Seal confidential data with PCR-bound policy
+    \item Demonstrate successful unseal when PCRs match policy
+    \item Simulate platform tampering via PCR extension
+    \item Verify policy enforcement prevents unauthorized unsealing
+\end{enumerate}
+
+\subsection{Tools and Environment}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Operating System}: Ubuntu 22.04 LTS
+    \item \textbf{TPM Implementation}: Software TPM (swtpm) exposed at \texttt{localhost:2321}
+    \item \textbf{Tools}: tpm2-tools suite (version 5.x)
+    \item \textbf{Connection}: \texttt{TPM2TOOLS\_TCTI="mssim:host=localhost,port=2321"}
+\end{itemize}
+
+\section{Task 1: Reading Initial PCR Values}
+
+\subsection{Procedure}
+
+The first step in our demonstration is to establish a baseline of the current platform configuration by reading the PCR values. These values represent the measured boot state of the system.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Read PCR Values]
+# Read PCRs 0 and 7 with SHA-256 bank
+tpm2_pcrread sha256:0,7
+
+# Save PCR values to binary file
+tpm2_pcrread -o pcr_snapshot.bin sha256:0,7
+\end{lstlisting}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step01_pcrread.png}
+\caption{Initial PCR values showing baseline measurement}
+\label{fig:pcr_initial}
+\end{figure}
+
+As shown in Figure \ref{fig:pcr_initial}, the PCR values represent the current system state:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{PCR 0}: Contains CRTM, BIOS, and platform extensions measurement
+    \item \textbf{PCR 7}: Contains platform-specific measurements
+\end{itemize}
+
+In the simulator environment, PCR 0 typically starts at 0x00...00 (all zeros), representing the baseline state. These PCR values will be used to create a sealing policy, ensuring that sealed data can only be accessed when the system is in this exact measured state.
+
+\section{Task 2: Creating TPM Primary Key}
+
+\subsection{Procedure}
+
+A primary storage key is created in the owner hierarchy. This key will serve as the parent for our sealed object, providing the root of trust for the key hierarchy.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Create Primary Storage Key]
+# Create primary key in owner hierarchy
+tpm2_createprimary -C o -g sha256 -G rsa \
+    -c primary.ctx \
+    -a "restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth"
+\end{lstlisting}
+
+\paragraph{Key Parameters:}
+\begin{itemize}[leftmargin=*]
+    \item \texttt{-C o}: Owner hierarchy
+    \item \texttt{-g sha256}: Hash algorithm for key name
+    \item \texttt{-G rsa}: RSA algorithm (2048-bit by default)
+    \item \texttt{-a}: Key attributes (restricted decrypt key, suitable for parent)
+\end{itemize}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step02_createprimary.png}
+\caption{Primary storage key creation output}
+\label{fig:primary_key}
+\end{figure}
+
+Figure \ref{fig:primary_key} shows the successful creation of the primary key with the following properties:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Algorithm}: RSA 2048-bit
+    \item \textbf{Name Algorithm}: SHA-256
+    \item \textbf{Exponent}: 65537 (standard RSA public exponent)
+    \item \textbf{Attributes}: fixedtpm, fixedparent, sensitivedataorigin, userwithauth, restricted, decrypt
+\end{itemize}
+
+The \texttt{fixedtpm} and \texttt{fixedparent} attributes ensure that this key cannot be duplicated to another TPM, providing hardware binding. The key context is saved to \texttt{primary.ctx} for use in subsequent operations.
+
+\section{Task 3: Creating PCR-Bound Policy}
+
+\subsection{Procedure}
+
+A PCR policy is created that binds to the current values of PCRs 0 and 7. This policy will be used when sealing data, ensuring that unsealing is only possible when these PCRs match their current values.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Create PCR Policy]
+# Create policy session
+tpm2_startauthsession --policy-session -S policy.session
+
+# Set PCR policy for PCRs 0 and 7
+tpm2_policypcr --session policy.session --pcr-list sha256:0,7
+
+# Get policy digest
+tpm2_policygetdigest --session policy.session -o policy.digest
+
+# Flush the session
+tpm2_flushcontext policy.session
+\end{lstlisting}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step03_policypcr.png}
+\caption{PCR policy creation and digest generation}
+\label{fig:policy}
+\end{figure}
+
+As shown in Figure \ref{fig:policy}, the policy digest is a cryptographic hash representing the authorization policy. This digest uniquely identifies the required PCR state. The policy can be thought of as:
+
+\begin{center}
+\texttt{Policy = "Allow access IF (PCR[0] == current\_value\_0) AND (PCR[7] == current\_value\_7)"}
+\end{center}
+
+The policy digest is saved to \texttt{policy.digest} and will be embedded in the sealed object during creation.
+
+\section{Task 4: Sealing Confidential Data}
+
+\subsection{Procedure}
+
+Confidential data is sealed using the PCR policy. The data is encrypted such that it can only be decrypted when the current PCR values match those specified in the policy.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Seal Data to PCR Policy]
+# Create secret data file
+echo "Confidential lab secret for Assignment 2" > secret.txt
+
+# Create sealed object with PCR policy
+tpm2_create -C primary.ctx \
+    -L policy.digest \
+    -i secret.txt \
+    -r seal.priv \
+    -u seal.pub \
+    -a "fixedtpm|fixedparent"
+\end{lstlisting}
+
+\paragraph{Parameters:}
+\begin{itemize}[leftmargin=*]
+    \item \texttt{-C primary.ctx}: Parent key (primary storage key)
+    \item \texttt{-L policy.digest}: Authorization policy (PCR-bound)
+    \item \texttt{-i secret.txt}: Input data to seal
+    \item \texttt{-r/-u}: Private and public portions of sealed object
+    \item \texttt{-a}: Attributes (TPM-bound, parent-bound)
+\end{itemize}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step04_create.png}
+\caption{Sealed object creation with PCR policy}
+\label{fig:seal}
+\end{figure}
+
+Figure \ref{fig:seal} shows the sealed object properties:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Type}: keyedhash (used for sealed data)
+    \item \textbf{Authorization Policy}: Embedded PCR policy digest
+    \item \textbf{Attributes}: fixedtpm, fixedparent (cannot be moved to another TPM)
+\end{itemize}
+
+The sealed object is created in two parts:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{seal.priv}: Encrypted private portion (contains the sealed secret)
+    \item \textbf{seal.pub}: Public portion (includes policy digest, public metadata)
+\end{itemize}
+
+\section{Task 5: Loading Sealed Object}
+
+\subsection{Procedure}
+
+The sealed object must be loaded into the TPM before it can be unsealed. This creates a transient handle that can be used for the unseal operation.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Load Sealed Object]
+# Load sealed object into TPM
+tpm2_load -C primary.ctx \
+    -r seal.priv \
+    -u seal.pub \
+    -c seal.ctx
+\end{lstlisting}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step05_load.png}
+\caption{Loading sealed object into TPM}
+\label{fig:load}
+\end{figure}
+
+As shown in Figure \ref{fig:load}, the sealed object is successfully loaded, and a unique object name (hash of public area) is computed. The context is saved to \texttt{seal.ctx} for the unseal operation.
+
+\section{Task 6: Unsealing with Correct PCR Values}
+
+\subsection{Procedure}
+
+With the PCR values unchanged from when the data was sealed, we attempt to unseal the secret. This should succeed because the current PCR values match the policy.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Unseal with Policy Session]
+# Start policy session
+tpm2_startauthsession --policy-session -S policy.session
+
+# Satisfy PCR policy
+tpm2_policypcr --session policy.session --pcr-list sha256:0,7
+
+# Unseal the data
+tpm2_unseal -c seal.ctx -p session:policy.session
+
+# Flush session
+tpm2_flushcontext policy.session
+\end{lstlisting}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step06_unseal.png}
+\caption{Policy session creation before unsealing}
+\label{fig:unseal_session}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step07_unseal_output.png}
+\caption{Successfully unsealed secret data}
+\label{fig:unseal_success}
+\end{figure}
+
+Figures \ref{fig:unseal_session} and \ref{fig:unseal_success} demonstrate the successful unseal operation. The unsealed content matches the original secret:
+
+\begin{center}
+\texttt{"Confidential lab secret for Assignment 2"}
+\end{center}
+
+\paragraph{Why Unsealing Succeeded:}
+\begin{itemize}[leftmargin=*]
+    \item Current PCR values exactly match the values when data was sealed
+    \item Policy session successfully satisfied the PCR policy
+    \item TPM verified the authorization and released the plaintext
+\end{itemize}
+
+This demonstrates that when the system state (as represented by PCRs) matches the sealed policy, access to confidential data is granted.
+
+\section{Task 7: Simulating Platform Tampering}
+
+\subsection{Procedure}
+
+To demonstrate the security property of PCR-bound sealing, we simulate a change in platform state by extending one of the PCRs used in the sealing policy. This represents what would happen if the system boot sequence were modified (e.g., by a bootkit or unauthorized firmware update).
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Extend PCR to Simulate Tampering]
+# Extend PCR 0 with new measurement
+echo "TAMPERED_BOOTLOADER" | openssl dgst -sha256 -binary | \
+    xxd -p -c 64 > tamper_hash.txt
+
+# Extend PCR 0 with the hash
+tpm2_pcrextend 0:sha256=$(cat tamper_hash.txt)
+
+# Read modified PCR value
+tpm2_pcrread sha256:0
+\end{lstlisting}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step08_pcrextend.png}
+\caption{PCR extension simulating platform compromise}
+\label{fig:pcr_extend}
+\end{figure}
+
+Figure \ref{fig:pcr_extend} shows the PCR 0 value after extension. The value has changed completely from the baseline, representing a different system state. This simulates scenarios such as:
+
+\begin{itemize}[leftmargin=*]
+    \item BIOS/UEFI firmware modification
+    \item Bootloader compromise (bootkit installation)
+    \item Unauthorized kernel or driver loading
+    \item Hardware or configuration changes
+\end{itemize}
+
+The PCR extend operation is irreversible:
+\begin{equation}
+\text{PCR}_{\text{new}} = \text{SHA256}(\text{PCR}_{\text{old}} || \text{"TAMPERED\_BOOTLOADER"})
+\end{equation}
+
+\section{Task 8: Demonstrating Unseal Failure}
+
+\subsection{Procedure}
+
+With the PCR values now different from the sealed policy, we attempt to unseal the data again. This should fail because the PCR policy check will not be satisfied.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Attempt Unseal After PCR Change]
+# Start policy session
+tpm2_startauthsession --policy-session -S policy.session
+
+# Attempt to satisfy PCR policy (will fail internally)
+tpm2_policypcr --session policy.session --pcr-list sha256:0,7
+
+# Attempt unseal (will fail)
+tpm2_unseal -c seal.ctx -p session:policy.session
+
+# Flush session
+tpm2_flushcontext policy.session
+\end{lstlisting}
+
+\subsection{Output and Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step09_unseal_fail.png}
+\caption{Unseal failure due to PCR policy mismatch}
+\label{fig:unseal_fail}
+\end{figure}
+
+As shown in Figure \ref{fig:unseal_fail}, the unseal operation fails with \texttt{TPM\_RC\_POLICY\_FAIL} error. This failure demonstrates the core security property of TPM sealed storage:
+
+\paragraph{Why Unsealing Failed:}
+\begin{enumerate}[leftmargin=*]
+    \item Current PCR 0 value $\neq$ Value when data was sealed
+    \item \texttt{tpm2\_policypcr} computes expected policy digest using current PCRs
+    \item Computed digest $\neq$ Digest embedded in sealed object
+    \item TPM refuses to release the plaintext
+\end{enumerate}
+
+\paragraph{Security Implications:}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Tamper Detection}: System changes are immediately detectable
+    \item \textbf{Data Protection}: Secrets inaccessible if platform compromised
+    \item \textbf{Measured Boot Integration}: Complete boot chain integrity verified
+    \item \textbf{Attack Prevention}: Bootkits and rootkits cannot access sealed data
+\end{itemize}
+
+This demonstrates that sealed data is cryptographically bound to platform state, and any modification to measured components prevents unauthorized access.
+
+\section{Task 9: Cleanup}
+
+\subsection{Procedure}
+
+After the demonstration, all transient handles and sessions are flushed to leave the TPM in a clean state.
+
+\subsection{Commands Executed}
+
+\begin{lstlisting}[language=bash, caption=Cleanup TPM State]
+# Flush all transient handles
+tpm2_getcap handles-transient
+
+# Flush specific contexts
+tpm2_flushcontext --transient-object
+
+# Optionally clear TPM for next run
+# tpm2_clear
+\end{lstlisting}
+
+\subsection{Output}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\textwidth]{attachments/step10_cleanup.png}
+\caption{TPM cleanup and transient handle flushing}
+\label{fig:cleanup}
+\end{figure}
+
+Figure \ref{fig:cleanup} shows the cleanup operations, ensuring no stale handles remain in TPM memory.
+
+\section{Conclusion}
+
+\subsection{Summary of Results}
+
+This practical demonstration successfully accomplished all objectives:
+
+\begin{enumerate}[leftmargin=*]
+    \item \checkmark \textbf{Created TPM primary storage key} (RSA 2048) in the owner hierarchy
+    \item \checkmark \textbf{Read initial PCR values} (PCRs 0, 7) establishing baseline
+    \item \checkmark \textbf{Created PCR-based sealing policy} binding to specific platform state
+    \item \checkmark \textbf{Sealed confidential data} to PCR values using cryptographic policy
+    \item \checkmark \textbf{Successfully unsealed} when PCR values matched the sealing policy
+    \item \checkmark \textbf{Extended PCR} to simulate platform compromise/modification
+    \item \checkmark \textbf{Demonstrated unseal failure} when PCR values changed (TPM\_RC\_POLICY\_FAIL)
+\end{enumerate}
+
+\subsection{Key Learnings}
+
+\paragraph{1. TPM Key Hierarchy}
+Understanding how TPM manages cryptographic keys with a root-of-trust architecture, where the primary storage key serves as the parent for child keys and sealed objects.
+
+\paragraph{2. PCR-Based Sealing}
+Data can be cryptographically bound to system state through PCR values. The irreversible extend operation creates a tamper-evident measurement chain that uniquely represents the boot sequence.
+
+\paragraph{3. Policy Authorization}
+TPM 2.0's policy-based authorization provides flexible, cryptographically-enforced access control. The policy digest embeds conditions (like PCR state) directly into objects.
+
+\paragraph{4. Security Model}
+TPM provides hardware-backed protection that cannot be bypassed by software-only attacks. Even with full OS compromise, sealed data remains inaccessible if platform state differs from policy.
+
+\subsection{Real-World Applications}
+
+The demonstrated techniques have direct applications in:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Full-Disk Encryption}: BitLocker, LUKS seal boot keys to PCRs. System only boots if firmware/bootloader unmodified.
+
+    \item \textbf{Secure Boot}: Measured boot complements signature-based secure boot, providing audit trail of boot sequence.
+
+    \item \textbf{Enterprise Security}: Remote attestation for compliance verification. IT administrators can verify device integrity before granting network access.
+
+    \item \textbf{IoT Devices}: Hardware-backed device identity and credentials protected from firmware extraction attacks.
+
+    \item \textbf{Cloud Infrastructure}: Virtual TPMs in cloud VMs enable tenant attestation, proving workload integrity to external parties.
+\end{itemize}
+
+\subsection{Challenges and Limitations}
+
+\paragraph{Challenges Encountered}
+\begin{itemize}[leftmargin=*]
+    \item Managing transient handles: TPM resources are limited, requiring careful handle management
+    \item Policy sessions: Understanding the difference between password-based and policy-based authorization
+    \item PCR selection: Choosing appropriate PCRs for sealing depends on what components need measurement
+\end{itemize}
+
+\paragraph{Limitations of Approach}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Software TPM}: Simulator provides learning environment but lacks hardware security guarantees of real TPM chip
+    \item \textbf{PCR Brittleness}: Minor system updates (kernel patches) change PCR values, requiring policy updates
+    \item \textbf{No Active Prevention}: Measured boot detects tampering but doesn't block execution (unlike Secure Boot)
+\end{itemize}
+
+\subsection{Conclusion}
+
+This practical exercise demonstrated the fundamental capabilities of TPM 2.0 for secure key storage and platform integrity verification. The combination of hardware-isolated cryptographic operations, tamper-evident PCR measurements, and policy-based authorization provides a robust foundation for trusted computing.
+
+The successful unseal operation proved that correctly configured systems can access sealed secrets, while the failed unseal after PCR modification confirmed that platform state changes prevent unauthorized access. This dual demonstration validates TPM's role as a hardware root of trust for modern secure computing architectures.
+
+The techniques explored form the basis for enterprise security solutions, full-disk encryption, remote attestation, and zero-trust architectures. Understanding TPM's capabilities and limitations is essential for designing secure systems that resist both software and low-level hardware attacks.
+
+\newpage

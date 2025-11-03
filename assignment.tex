@@ -1,0 +1,154 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+\usepackage{lipsum}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Page setup
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Assignment 2 - Trusted Computing}
+\lhead{TPM and TEE}
+\rfoot{Page \thepage}
+
+% Listings setup for code
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    commentstyle=\color{green!60!black},
+    keywordstyle=\color{blue},
+    stringstyle=\color{orange},
+}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    pdftitle={Assignment 2 - Trusted Computing},
+}
+
+% Title formatting
+\titleformat{\section}
+  {\normalfont\Large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries}{\thesubsection}{1em}{}
+
+% Document begins
+\begin{document}
+
+% ============================================================
+% TITLE PAGE
+% ============================================================
+
+\begin{titlepage}
+    \centering
+    \vspace{2cm}
+
+    {\huge \textbf{Assignment 2}}\\[0.5cm]
+    {\LARGE Trusted Computing}\\[0.3cm]
+    {\Large TPM Architecture and TEE}\\[2cm]
+
+    \rule{\linewidth}{0.5mm}\\[0.4cm]
+    {\Large \textbf{Theory and Practical Implementation}}\\[0.4cm]
+    \rule{\linewidth}{0.5mm}\\[2cm]
+
+    \begin{tabular}{rl}
+        \textbf{Student Name:} & [Your Full Name] \\[0.3cm]
+        \textbf{Roll Number:} & [Your Roll Number] \\[0.3cm]
+        \textbf{Course:} & Trusted Computing \\[0.3cm]
+        \textbf{Department:} & [Your Department] \\[0.3cm]
+        \textbf{Date:} & November 3, 2025 \\
+    \end{tabular}
+
+    \vfill
+
+    {\large Submitted to}\\[0.3cm]
+    {\Large \textbf{[Instructor Name]}}\\[0.2cm]
+    {\large [Department Name]}\\[0.2cm]
+    {\large [University/College Name]}
+
+\end{titlepage}
+
+% ============================================================
+% TABLE OF CONTENTS
+% ============================================================
+
+\newpage
+\tableofcontents
+\newpage
+
+% ============================================================
+% PART A - THEORY QUESTIONS
+% ============================================================
+
+\part{Theory Questions (10 marks)}
+
+% Include all Part A content
+\input{parta_q1.tex}
+\input{parta_q2.tex}
+\input{parta_q3.tex}
+\input{parta_q4.tex}
+
+% ============================================================
+% PART B - PRACTICAL TASKS
+% ============================================================
+
+\newpage
+\part{Practical Tasks (10 marks)}
+
+\input{partb_practical.tex}
+
+% ============================================================
+% REFERENCES
+% ============================================================
+
+\newpage
+\section*{References}
+\addcontentsline{toc}{section}{References}
+
+\begin{enumerate}[leftmargin=*]
+    \item Trusted Computing Group, ``TPM 2.0 Library Specification'', Part 1: Architecture, Rev. 1.59, November 2019
+
+    \item Arthur, W., \& Challener, D. (2015). \textit{A Practical Guide to TPM 2.0}. Apress
+
+    \item TCG PC Client Platform Firmware Profile Specification, Family 2.0, Level 00 Revision 1.05
+
+    \item Sailer, R., et al. (2004). ``Design and Implementation of a TCG-based Integrity Measurement Architecture''. \textit{USENIX Security Symposium}
+
+    \item ARM, ``ARM Security Technology - Building a Secure System using TrustZone Technology'', 2022
+
+    \item Ngabonziza, B., et al. (2016). ``TrustZone Explained: Architectural Features and Use Cases''. \textit{IEEE Cybersecurity Development Conference}
+
+    \item Costan, V., \& Devadas, S. (2016). ``Intel SGX Explained''. \textit{IACR Cryptology ePrint Archive}
+
+    \item McKeen, F., et al. (2013). ``Innovative Instructions and Software Model for Isolated Execution''. \textit{HASP Workshop}
+
+    \item GlobalPlatform, ``TEE Internal Core API Specification'', Version 1.3.1, 2022
+
+    \item Intel Corporation, ``Intel SGX Developer Reference'', 2024
+\end{enumerate}
+
+\end{document}

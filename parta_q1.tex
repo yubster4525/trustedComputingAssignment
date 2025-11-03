@@ -1,0 +1,175 @@
+\section{Question 1: TPM Architecture and Functions}
+
+\subsection*{Question}
+\textit{Explain the internal architecture of a Trusted Platform Module. How do PCRs (Platform Configuration Registers) contribute to measured boot?}
+
+\subsection{Introduction}
+
+A Trusted Platform Module (TPM) is a specialized cryptographic co-processor designed to provide hardware-based security functions. Defined by the Trusted Computing Group (TCG), TPM serves as a hardware root of trust for platform integrity, secure key storage, and cryptographic operations. This answer explores the internal architecture of TPM 2.0 and explains how Platform Configuration Registers (PCRs) enable measured boot.
+
+\subsection{Internal Architecture of TPM}
+
+The TPM architecture consists of several key components organized into functional layers:
+
+\subsubsection{Root of Trust Components}
+
+\paragraph{Core Root of Trust for Measurement (CRTM)}
+\begin{itemize}[leftmargin=*]
+    \item The first code to execute after system power-on or reset
+    \item Typically resides in immutable firmware (Boot Block in BIOS/UEFI)
+    \item Cannot be measured by any other component (it IS the root of trust)
+    \item Responsible for:
+    \begin{itemize}
+        \item Performing self-integrity checks
+        \item Measuring the next stage of boot code (BIOS/UEFI)
+        \item Storing the first measurement in PCR-0
+    \end{itemize}
+\end{itemize}
+
+\paragraph{Root of Trust for Storage (RTS)}
+\begin{itemize}[leftmargin=*]
+    \item Provides secure key hierarchy and protected storage
+    \item Based on the \textbf{Storage Root Key (SRK)}:
+    \begin{itemize}
+        \item 2048-bit RSA or ECC key generated inside TPM
+        \item Never exported from the TPM
+        \item Acts as the root of the key hierarchy
+        \item Used to wrap (encrypt) all other storage keys
+    \end{itemize}
+    \item Ensures that keys stored outside TPM are protected
+    \item Maintains key hierarchy: SRK $\rightarrow$ Primary Keys $\rightarrow$ Child Keys $\rightarrow$ Leaf Keys
+\end{itemize}
+
+\paragraph{Root of Trust for Reporting (RTR)}
+\begin{itemize}[leftmargin=*]
+    \item Enables trustworthy reporting of platform state
+    \item Uses \textbf{Attestation Identity Key (AIK)}:
+    \begin{itemize}
+        \item Special-purpose signing key for creating quotes
+        \item Certified by TPM's Endorsement Key (EK)
+        \item Used in remote attestation protocols
+    \end{itemize}
+    \item Provides signed reports of PCR values to remote verifiers
+    \item Guarantees authenticity of platform measurements
+\end{itemize}
+
+\subsubsection{Cryptographic Engine}
+
+The TPM contains a dedicated hardware cryptographic processor with:
+
+\paragraph{Key Generation Engine}
+\begin{itemize}[leftmargin=*]
+    \item Hardware-based random number generator (RNG) meeting NIST SP 800-90A standards
+    \item Generates cryptographic keys internally (never exposed during generation)
+    \item Supports RSA (1024, 2048 bits) and ECC (NIST P-256, P-384) algorithms
+\end{itemize}
+
+\paragraph{Asymmetric Crypto Accelerators}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{RSA Engine}: Performs RSA operations (sign, verify, encrypt, decrypt)
+    \item \textbf{ECC Engine}: Handles elliptic curve operations (ECDSA, ECDH)
+    \item Hardware acceleration provides tamper-resistant computation
+    \item Typical performance: 1-2 seconds for 2048-bit RSA signature
+\end{itemize}
+
+\paragraph{Hash Engine}
+\begin{itemize}[leftmargin=*]
+    \item Computes cryptographic hashes for measurements
+    \item Supports multiple algorithms simultaneously: SHA-1, SHA-256, SHA-384, SHA-512
+    \item Performs PCR extend operations: $\text{PCR}_{\text{new}} = \text{HASH}(\text{PCR}_{\text{old}} || \text{data})$
+\end{itemize}
+
+\subsubsection{Platform Configuration Registers (PCRs)}
+
+PCRs are special-purpose registers with unique properties:
+
+\paragraph{Physical Characteristics}
+\begin{itemize}[leftmargin=*]
+    \item 24 or more registers (TPM 2.0 allows implementation-specific numbers)
+    \item Each PCR is 160 bits (SHA-1), 256 bits (SHA-256), or 384 bits (SHA-384)
+    \item Organized into \textbf{PCR banks} - one bank per hash algorithm
+\end{itemize}
+
+\paragraph{Usage Convention (TCG PC Client Specification)}
+\begin{itemize}[leftmargin=*]
+    \item PCR 0: CRTM, BIOS, Host Platform Extensions
+    \item PCR 1: Host Platform Configuration
+    \item PCR 2: Option ROM Code
+    \item PCR 3: Option ROM Configuration and Data
+    \item PCR 4: IPL Code (Initial Program Loader - like GRUB)
+    \item PCR 5: IPL Configuration and Data
+    \item PCR 6-7: Platform-specific
+    \item PCR 8-15: Static OS usage (kernel, drivers, configuration)
+    \item PCR 16-23: Dynamic OS usage (applications, user data)
+\end{itemize}
+
+\paragraph{Key Properties}
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Write-Once per Boot}: Cannot be directly written, only extended
+    \item \textbf{Reset on Boot}: PCRs cleared to known values at startup
+    \item \textbf{Atomic Operations}: Extend is an atomic hardware operation
+    \item \textbf{Tamper-Evident}: Any change in boot sequence produces different final values
+\end{enumerate}
+
+\subsection{How PCRs Contribute to Measured Boot}
+
+\subsubsection{The Extend Operation}
+
+The core of measured boot is the \textbf{PCR Extend} operation:
+
+\begin{equation}
+\text{PCR}_{\text{new}} = \text{HASH}(\text{PCR}_{\text{old}} || \text{data\_to\_measure})
+\end{equation}
+
+\paragraph{Mathematical Properties:}
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{One-way Function}: Cannot reverse to find original inputs
+    \item \textbf{Collision Resistant}: Practically impossible to find two inputs producing same output
+    \item \textbf{Avalanche Effect}: Tiny change in input causes completely different output
+    \item \textbf{Deterministic}: Same boot sequence always produces same final PCR values
+\end{enumerate}
+
+\subsubsection{Measured Boot Process}
+
+The measured boot creates an unbroken chain of trust:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Power-On Reset}: PCRs initialized to known values (0x00...00)
+    \item \textbf{CRTM Execution}: Measures BIOS/UEFI firmware $\rightarrow$ Extends PCR-0
+    \item \textbf{BIOS/UEFI Execution}: Measures boot loader $\rightarrow$ Extends PCR-4
+    \item \textbf{Boot Loader}: Measures kernel $\rightarrow$ Extends PCR-8/9
+    \item \textbf{OS Kernel}: Measures drivers/services $\rightarrow$ Extends PCR-10+
+\end{enumerate}
+
+\textbf{Key Principle}: Each stage measures the next stage BEFORE executing it.
+
+\subsubsection{Security Guarantees}
+
+\paragraph{Tamper Detection}
+If any component is modified, the PCR value changes completely:
+\begin{itemize}[leftmargin=*]
+    \item Original Boot: PCR[0] = 0xAAAA...1111
+    \item After Tamper: PCR[0] = 0xBBBB...2222
+\end{itemize}
+
+\paragraph{Use Cases Enabled by Measured Boot}
+
+\textbf{1. Sealed Storage}
+\begin{itemize}[leftmargin=*]
+    \item Encrypt data such that it can only be decrypted when specific PCR values match
+    \item Example: BitLocker seals disk encryption key to PCRs 0,1,2,3,4,5,6,7,11
+    \item If BIOS or kernel modified $\rightarrow$ PCR values change $\rightarrow$ Disk cannot be decrypted
+\end{itemize}
+
+\textbf{2. Remote Attestation}
+\begin{itemize}[leftmargin=*]
+    \item TPM generates quote: $\text{Sign}(\text{PCR\_values} || \text{nonce}, \text{AIK}_{\text{private}})$
+    \item Remote verifier checks PCR values against "known good" reference
+    \item Grant/deny access based on platform integrity
+\end{itemize}
+
+\subsection{Conclusion}
+
+The TPM's internal architecture, centered around hardware-isolated cryptographic functions and tamper-evident PCRs, provides a robust foundation for trusted computing. PCRs enable measured boot by creating an irreversible hash chain representing the entire boot sequence. This mechanism allows systems to prove their integrity to both local applications (via sealed storage) and remote verifiers (via attestation), forming the cornerstone of hardware-based platform security.
+
+\newpage
