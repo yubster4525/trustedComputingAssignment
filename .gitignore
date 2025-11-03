@@ -1,0 +1,22 @@
+# Claude Code directory
+.claude/
+
+# macOS files
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*~
+
+# Working directory artifacts (will be created on Linux)
+tpm_demo_*/
+primary.ctx
+sealed.*
+pcr_*.bin
+pcr_*.dat
+secret.txt
+unsealed*.txt
+malicious.bin
+*.ctx
